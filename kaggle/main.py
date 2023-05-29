@@ -13,23 +13,38 @@ import ta
 # Neural Network library
 from keras.models import Sequential
 from keras.layers import LSTM, Dense, Dropout
-df = pd.read_excel("output.xlsx")
+btc_data = pd.read_excel("btc.xlsx")
+dxy_data = pd.read_csv("dxy.csv", sep=';')
+
+
+# Convert date column in dxy_data to yyyy-mm-dd format
+dxy_data['Date'] = pd.to_datetime(dxy_data['Date'], format='%m/%d/%Y').dt.strftime('%Y-%m-%d')
+
+merged_data = pd.merge(btc_data, dxy_data, on="Date", how="inner")
+
+# Calculate percentage change of BTC and DXY prices
+btc_data['BTC_Percentage_Change'] = btc_data['Close'].pct_change()
+dxy_data['DXY_Percentage_Change'] = dxy_data['Close'].pct_change()
+
+# Merge the percentage change columns into the merged DataFrame
+merged_data = pd.merge(btc_data, dxy_data[['Date', 'DXY_Percentage_Change']], on='Date', how='left')
+
 
 ## Datetime conversion
-df['Date'] = pd.to_datetime(df.Date)
+btc_data['Date'] = pd.to_datetime(btc_data.Date)
 
 # Setting the index
-df.set_index('Date', inplace=True)
+btc_data.set_index('Date', inplace=True)
 
 # Dropping any NaNs
-df.dropna(inplace=True)
+btc_data.dropna(inplace=True)
 
-df = ta.add_all_ta_features(df, open="Open", high="High", low="Low", close="Close", volume="Volume", fillna=True)
+btc_data = ta.add_all_ta_features(btc_data, open="Open", high="High", low="Low", close="Close", volume="Volume", fillna=True)
 # Dropping everything else besides 'Close' and the Indicators
-df.drop(['Open', 'High', 'Low', 'Adj Close', 'Volume'], axis=1, inplace=True)
+btc_data.drop(['Open', 'High', 'Low', 'Adj Close', 'Volume'], axis=1, inplace=True)
 
 # Only using the last 1000 days of data to get a more accurate representation of the current market climate
-df = df.tail(1000)
+btc_data = btc_data.tail(1000)
 
 
 
@@ -38,12 +53,12 @@ df = df.tail(1000)
 # Scale fitting the close prices separately for inverse_transformations purposes later
 close_scaler = RobustScaler()
 
-close_scaler.fit(df[['Close']])
+close_scaler.fit(btc_data[['Close']])
 
 # Normalizing/Scaling the DF
 scaler = RobustScaler()
 
-df = pd.DataFrame(scaler.fit_transform(df), columns=df.columns, index=df.index)
+btc_data = pd.DataFrame(scaler.fit_transform(btc_data), columns=btc_data.columns, index=btc_data.index)
 
 
 def split_sequence(seq, n_steps_in, n_steps_out):
@@ -122,11 +137,11 @@ def validater(n_per_in, n_per_out):
     """
 
     # Creating an empty DF to store the predictions
-    predictions = pd.DataFrame(index=df.index, columns=[df.columns[0]])
+    predictions = pd.DataFrame(index=btc_data.index, columns=[btc_data.columns[0]])
 
-    for i in range(n_per_in, len(df) - n_per_in, n_per_out):
+    for i in range(n_per_in, len(btc_data) - n_per_in, n_per_out):
         # Creating rolling intervals to predict off of
-        x = df[-i - n_per_in:-i]
+        x = btc_data[-i - n_per_in:-i]
 
         # Predicting using rolling intervals
         yhat = model.predict(np.array(x).reshape(1, n_per_in, n_features))
@@ -172,9 +187,9 @@ n_per_in  = 90
 # How many periods to predict
 n_per_out = 30
 # Features
-n_features = df.shape[1]
+n_features = btc_data.shape[1]
 # Splitting the data into appropriate sequences
-X, y = split_sequence(df.to_numpy(), n_per_in, n_per_out)
+X, y = split_sequence(btc_data.to_numpy(), n_per_in, n_per_out)
 
 ## Creating the NN
 
@@ -211,9 +226,9 @@ model.compile(optimizer='adam', loss='mse', metrics=['accuracy'])
 res = model.fit(X, y, epochs=50, batch_size=128, validation_split=0.1)
 
 # Transforming the actual values to their original price
-actual = pd.DataFrame(close_scaler.inverse_transform(df[["Close"]]),
-                      index=df.index,
-                      columns=[df.columns[0]])
+actual = pd.DataFrame(close_scaler.inverse_transform(btc_data[["Close"]]),
+                      index=btc_data.index,
+                      columns=[btc_data.columns[0]])
 
 # Getting a DF of the predicted values to validate against
 predictions = validater(n_per_in, n_per_out)
@@ -237,25 +252,25 @@ plt.xlim(datetime.datetime.strptime('2018-05', '%Y-%m'), datetime.datetime.strpt
 plt.show()
 
 # Predicting off of the most recent days from the original DF
-yhat = model.predict(np.array(df.tail(n_per_in)).reshape(1, n_per_in, n_features))
+yhat = model.predict(np.array(btc_data.tail(n_per_in)).reshape(1, n_per_in, n_features))
 
 # Transforming the predicted values back to their original format
 yhat = close_scaler.inverse_transform(yhat)[0]
 
 # Creating a DF of the predicted prices
 preds = pd.DataFrame(yhat,
-                     index=pd.date_range(start=df.index[-1]+timedelta(days=1),
+                     index=pd.date_range(start=btc_data.index[-1] + timedelta(days=1),
                                          periods=len(yhat),
                                          freq="B"),
-                     columns=[df.columns[0]])
+                     columns=[btc_data.columns[0]])
 
 # Number of periods back to plot the actual values
 pers = n_per_in
 
 # Transforming the actual values to their original price
-actual = pd.DataFrame(close_scaler.inverse_transform(df[["Close"]].tail(pers)),
-                      index=df.Close.tail(pers).index,
-                      columns=[df.columns[0]])
+actual = pd.DataFrame(close_scaler.inverse_transform(btc_data[["Close"]].tail(pers)),
+                      index=btc_data.Close.tail(pers).index,
+                      columns=[btc_data.columns[0]])
 actual = pd.concat([actual, preds.head(1)])
 # Printing the predicted prices
 print(preds)
